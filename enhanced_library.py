@@ -3,6 +3,18 @@ from typing import Optional, List, Dict, Any
 from enhanced_database import get_connection
 import enhanced_config as config
 import bcrypt # 导入 bcrypt 库
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/tmp/lms.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ====================== 用户认证与密码管理 ======================
 
@@ -76,22 +88,57 @@ def authenticate_admin(username: str, password: str) -> Optional[Dict]:
             return None
 
 def authenticate_reader(library_card_no: str, password: str) -> Optional[Dict]:
-    """验证读者身份"""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT library_card_no, name, password_hash, status 
-                FROM readers WHERE library_card_no = %s
-            """, (library_card_no,))
-            reader_data = cur.fetchone()
-            if reader_data and reader_data['status'] == '正常' and reader_data['password_hash'] and \
-               verify_password(password, reader_data['password_hash']):
+    """
+    验证读者身份
+    
+    Args:
+        library_card_no (str): 读者借书证号
+        password (str): 读者密码
+        
+    Returns:
+        Optional[Dict]: 认证成功返回读者信息字典，失败返回None
+    """
+    if not library_card_no or not password:
+        logger.warning(f"Authentication failed: Empty credentials for card_no: {library_card_no}")
+        return None
+        
+    try:
+        logger.info(f"Attempting to authenticate reader with card_no: {library_card_no}")
+        
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT library_card_no, name, password_hash, status 
+                    FROM readers WHERE library_card_no = %s
+                """, (library_card_no,))
+                reader_data = cur.fetchone()
+                
+                if not reader_data:
+                    logger.warning(f"Authentication failed: Reader with card_no {library_card_no} not found")
+                    return None
+                    
+                if reader_data['status'] != '正常':
+                    logger.warning(f"Authentication failed: Reader {library_card_no} has status: {reader_data['status']}")
+                    return None
+                    
+                if not reader_data['password_hash']:
+                    logger.warning(f"Authentication failed: Reader {library_card_no} has no password set")
+                    return None
+                    
+                if not verify_password(password, reader_data['password_hash']):
+                    logger.warning(f"Authentication failed: Invalid password for reader {library_card_no}")
+                    return None
+                
+                logger.info(f"Authentication successful for reader: {library_card_no} ({reader_data['name']})")
                 return {
                     'library_card_no': reader_data['library_card_no'],
                     'name': reader_data['name'],
                     'role': 'reader' 
                 }
-            return None
+                
+    except Exception as e:
+        logger.error(f"Database error during reader authentication for {library_card_no}: {str(e)}")
+        return None
 
 def authenticate_user(username_or_card_no: str, password: str) -> Optional[Dict]:
     """
@@ -168,47 +215,77 @@ def add_book_category(isbn: str, category: str, title: str, author: str,
             print(f"成功添加图书类别：{title}")
 
 def search_books(title: str = None, author: str = None, isbn: str = None, category: str = None):
-    """图书查询功能，支持模糊查询。包含实际副本数和可借阅数。"""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            sql = """
-                SELECT 
-                    bc.isbn, bc.category, bc.title, bc.author, bc.publisher, 
-                    bc.publish_date, bc.price, bc.total_copies, bc.description,
-                    COALESCE(SUM(CASE WHEN b.book_number IS NOT NULL THEN 1 ELSE 0 END), 0) as actual_total_copies, 
-                    COALESCE(SUM(CASE WHEN b.is_available = '可借' THEN 1 ELSE 0 END), 0) as actual_available_copies
-                FROM book_categories bc
-                LEFT JOIN books b ON bc.isbn = b.isbn
-                WHERE 1=1
-            """
-            params = []
-            
-            if title:
-                sql += " AND bc.title LIKE %s"
-                params.append(f"%{title}%")
-            if author:
-                sql += " AND bc.author LIKE %s"
-                params.append(f"%{author}%")
-            if isbn:
-                sql += " AND bc.isbn = %s" # ISBN通常是精确匹配
-                params.append(isbn)
-            if category:
-                sql += " AND bc.category LIKE %s"
-                params.append(f"%{category}%")
-            
-            sql += " GROUP BY bc.isbn, bc.category, bc.title, bc.author, bc.publisher, bc.publish_date, bc.price, bc.total_copies, bc.description ORDER BY bc.title"
-            
-            cur.execute(sql, params)
-            # 将查询结果转换为字典列表，并确保 available_copies 是整数
-            results = []
-            for row in cur.fetchall():
-                row_dict = dict(row)
-                # 更新 book_categories 表中的 available_copies 字段，使其与实际可借数量一致
-                # 注意：这应该由触发器或后端逻辑在借还书时自动处理，此处仅为查询时修正显示
-                # 更好的做法是 schema 中的 available_copies 字段始终准确
-                row_dict['available_copies'] = row_dict.get('actual_available_copies', 0)
-                results.append(row_dict)
-            return results
+    """
+    图书查询功能，支持模糊查询。包含实际副本数和可借阅数。
+    
+    Args:
+        title (str, optional): 书名，支持模糊查询
+        author (str, optional): 作者，支持模糊查询
+        isbn (str, optional): ISBN号，精确匹配
+        category (str, optional): 图书类别，支持模糊查询
+        
+    Returns:
+        List[Dict]: 图书信息列表
+    """
+    try:
+        # 记录搜索参数
+        search_params = {
+            'title': title,
+            'author': author, 
+            'isbn': isbn,
+            'category': category
+        }
+        active_params = {k: v for k, v in search_params.items() if v is not None}
+        logger.info(f"Searching books with parameters: {active_params}")
+        
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT 
+                        bc.isbn, bc.category, bc.title, bc.author, bc.publisher, 
+                        bc.publish_date, bc.price, bc.total_copies, bc.description,
+                        COALESCE(SUM(CASE WHEN b.book_number IS NOT NULL THEN 1 ELSE 0 END), 0) as actual_total_copies, 
+                        COALESCE(SUM(CASE WHEN b.is_available = '可借' THEN 1 ELSE 0 END), 0) as actual_available_copies
+                    FROM book_categories bc
+                    LEFT JOIN books b ON bc.isbn = b.isbn
+                    WHERE 1=1
+                """
+                params = []
+                
+                if title:
+                    sql += " AND bc.title LIKE %s"
+                    params.append(f"%{title}%")
+                if author:
+                    sql += " AND bc.author LIKE %s"
+                    params.append(f"%{author}%")
+                if isbn:
+                    sql += " AND bc.isbn = %s" # ISBN通常是精确匹配
+                    params.append(isbn)
+                if category:
+                    sql += " AND bc.category LIKE %s"
+                    params.append(f"%{category}%")
+                
+                sql += " GROUP BY bc.isbn, bc.category, bc.title, bc.author, bc.publisher, bc.publish_date, bc.price, bc.total_copies, bc.description ORDER BY bc.title"
+                
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                
+                # 将查询结果转换为字典列表，并确保 available_copies 是整数
+                results = []
+                for row in rows:
+                    row_dict = dict(row)
+                    # 更新 book_categories 表中的 available_copies 字段，使其与实际可借数量一致
+                    # 注意：这应该由触发器或后端逻辑在借还书时自动处理，此处仅为查询时修正显示
+                    # 更好的做法是 schema 中的 available_copies 字段始终准确
+                    row_dict['available_copies'] = row_dict.get('actual_available_copies', 0)
+                    results.append(row_dict)
+                
+                logger.info(f"Book search completed. Found {len(results)} results")
+                return results
+                
+    except Exception as e:
+        logger.error(f"Error during book search with params {active_params}: {str(e)}")
+        return []
 
 # ====================== 具体图书管理 ======================
 
@@ -297,30 +374,90 @@ def add_reader(library_card_no: str, name: str, gender: str = '男',
                 return False, f"添加读者失败：{str(e)}"
 
 def search_readers(card_no: str = None, name: str = None, department: str = None):
-    """读者信息查询"""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.callproc('GetReaderInfo', (card_no, name, department))
-            results = cur.fetchall()
-            
-            # 转换英文字段为中文显示
-            for reader in results:
-                # 假设数据库中存储的是 '男' 或 '女'
-                # if reader['gender'] == 'male':
-                #     reader['gender'] = '男'
-                # elif reader['gender'] == 'female':
-                #     reader['gender'] = '女'
+    """
+    读者信息查询
+    
+    Args:
+        card_no (str, optional): 借书证号，精确匹配
+        name (str, optional): 姓名，模糊查询
+        department (str, optional): 部门，模糊查询
+        
+    Returns:
+        List[Dict]: 读者信息列表
+    """
+    try:
+        # 记录搜索参数
+        search_params = {
+            'card_no': card_no,
+            'name': name,
+            'department': department
+        }
+        active_params = {k: v for k, v in search_params.items() if v is not None}
+        logger.info(f"Searching readers with parameters: {active_params}")
+        
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                try:
+                    # 尝试使用存储过程
+                    cur.callproc('GetReaderInfo', (card_no, name, department))
+                    results = cur.fetchall()
+                    logger.info(f"Reader search completed using stored procedure. Found {len(results)} results")
                     
-                # 假设数据库中存储的是 '正常', '冻结', '注销'
-                # if reader['status'] == 'active':
-                #     reader['status'] = '正常'
-                # elif reader['status'] == 'frozen':
-                #     reader['status'] = '冻结'
-                # elif reader['status'] == 'cancelled':
-                #     reader['status'] = '注销'
-                pass # 添加 pass 语句以解决 IndentationError
-            
-            return results
+                except Exception as proc_error:
+                    # 如果存储过程不存在或出错，使用直接SQL查询作为备选方案
+                    logger.warning(f"Stored procedure failed, using direct SQL query: {str(proc_error)}")
+                    
+                    sql = """
+                        SELECT library_card_no, name, gender, birth_date, id_card, title,
+                               max_borrow_count, current_borrow_count, department, address, 
+                               phone, status, registration_date
+                        FROM readers
+                        WHERE 1=1
+                    """
+                    params = []
+                    
+                    if card_no:
+                        sql += " AND library_card_no = %s"
+                        params.append(card_no)
+                    if name:
+                        sql += " AND name LIKE %s"
+                        params.append(f"%{name}%")
+                    if department:
+                        sql += " AND department LIKE %s"
+                        params.append(f"%{department}%")
+                    
+                    sql += " ORDER BY library_card_no"
+                    
+                    cur.execute(sql, params)
+                    results = cur.fetchall()
+                    logger.info(f"Reader search completed using direct SQL. Found {len(results)} results")
+                
+                # 转换结果为字典列表并进行数据处理
+                processed_results = []
+                for reader in results:
+                    reader_dict = dict(reader)
+                    
+                    # 可以在这里添加数据转换逻辑，如果需要的话
+                    # 目前数据库中应该已经存储的是中文值，所以注释掉转换代码
+                    # if reader_dict.get('gender') == 'male':
+                    #     reader_dict['gender'] = '男'
+                    # elif reader_dict.get('gender') == 'female':
+                    #     reader_dict['gender'] = '女'
+                    
+                    # if reader_dict.get('status') == 'active':
+                    #     reader_dict['status'] = '正常'
+                    # elif reader_dict.get('status') == 'frozen':
+                    #     reader_dict['status'] = '冻结'
+                    # elif reader_dict.get('status') == 'cancelled':
+                    #     reader_dict['status'] = '注销'
+                    
+                    processed_results.append(reader_dict)
+                
+                return processed_results
+                
+    except Exception as e:
+        logger.error(f"Error during reader search with params {active_params}: {str(e)}")
+        return []
 
 def update_reader_info(library_card_no: str, **kwargs):
     """更新读者信息"""
