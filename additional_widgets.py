@@ -181,12 +181,13 @@ class ReaderManagementWidget(QWidget):
         reader_group_layout.addWidget(QLabel("联系地址:"), 4, 0); self.reader_address = QTextEdit(); self.reader_address.setFixedHeight(80); self.reader_address.setPlaceholderText("详细联系地址..."); reader_group_layout.addWidget(self.reader_address, 4, 1, 1, 3)
         form_layout.addWidget(reader_group)
 
-        # Buttons for Category Tab
-        cat_button_layout = QHBoxLayout()
+        # Buttons for Reader Tab
+        reader_button_layout = QHBoxLayout()
         self.btn_add_reader = QPushButton("➕ 添加读者"); self.btn_search_reader = QPushButton("🔍 搜索读者")
-        self.btn_clear_reader_form = QPushButton("🗑️ 清空表单"); self.btn_load_cat_to_form = QPushButton("📝 编辑选中")
-        cat_button_layout.addWidget(self.btn_add_reader); cat_button_layout.addWidget(self.btn_search_reader); cat_button_layout.addWidget(self.btn_clear_reader_form); cat_button_layout.addWidget(self.btn_load_cat_to_form); cat_button_layout.addStretch()
-        form_layout.addLayout(cat_button_layout)
+        self.btn_clear_reader_form = QPushButton("🗑️ 清空表单"); self.btn_load_reader_to_form = QPushButton("📝 编辑选中")
+        self.btn_update_reader = QPushButton("💾 更新读者"); self.btn_delete_reader = QPushButton("🗑️ 删除读者")
+        reader_button_layout.addWidget(self.btn_add_reader); reader_button_layout.addWidget(self.btn_search_reader); reader_button_layout.addWidget(self.btn_clear_reader_form); reader_button_layout.addWidget(self.btn_load_reader_to_form); reader_button_layout.addWidget(self.btn_update_reader); reader_button_layout.addWidget(self.btn_delete_reader); reader_button_layout.addStretch()
+        form_layout.addLayout(reader_button_layout)
         splitter.addWidget(form_frame)
 
         # Table Frame for Categories
@@ -199,10 +200,12 @@ class ReaderManagementWidget(QWidget):
         splitter.setSizes([300, 450])
         main_layout.addWidget(splitter)
 
-        # Connections for Category Tab
+        # Connections for Reader Tab
         self.btn_add_reader.clicked.connect(self.add_reader); self.btn_search_reader.clicked.connect(self.search_readers)
         self.btn_clear_reader_form.clicked.connect(self.clear_reader_form)
-        self.btn_load_cat_to_form.clicked.connect(self.load_reader_to_form)
+        self.btn_load_reader_to_form.clicked.connect(self.load_reader_to_form)
+        self.btn_update_reader.clicked.connect(self.update_reader)
+        self.btn_delete_reader.clicked.connect(self.delete_reader)
         self.reader_table.itemDoubleClicked.connect(self.load_reader_to_form) # For admin to edit
 
     def init_reader_stats_tab(self):
@@ -233,6 +236,11 @@ class ReaderManagementWidget(QWidget):
         value_label = QLabel(value); value_label.setStyleSheet("color:white; font-weight:bold; font-size:24px;"); value_label.setAlignment(Qt.AlignCenter); value_label.setObjectName(f"stat_value_{row}_{col}")
         card_layout.addWidget(title_label); card_layout.addWidget(value_label)
         layout.addWidget(card, row, col)
+        
+        # Store reference to value label for updating
+        if not hasattr(self, 'stat_labels'):
+            self.stat_labels = {}
+        self.stat_labels[f'{row}_{col}'] = value_label
 
     def darken_color(self, color_hex):
         try:
@@ -288,13 +296,14 @@ class ReaderManagementWidget(QWidget):
         try:
             success, message = lib.add_reader(
                 library_card_no=library_card_no, name=name, gender=gender,
-                id_card=id_number, phone=phone, title=title,
+                id_card=id_number, phone=phone, email=email, title=title,
                 max_borrow_count=max_borrow, address=address
             )
             if success:
                 QMessageBox.information(self, "添加成功", message)
                 self.clear_reader_form()
                 self.load_all_readers()
+                self.load_reader_statistics()  # Also update statistics
                 if self.parent_window: self.parent_window.show_status_message(f"✓ 读者 '{name}' 已添加", 3000, "success")
             else: QMessageBox.warning(self, "添加失败", message)
         except Exception as e: QMessageBox.critical(self, "操作失败", f"添加读者失败：\n{e}")
