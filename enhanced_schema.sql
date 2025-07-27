@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS readers (
     department VARCHAR(100) COMMENT '工作部门',
     address VARCHAR(255) COMMENT '家庭住址',
     phone VARCHAR(20) COMMENT '联系电话',
+    email VARCHAR(100) COMMENT '电子邮箱',
     registration_date DATE DEFAULT (CURRENT_DATE()) COMMENT '注册日期',
     status ENUM('正常', '冻结', '注销') NOT NULL DEFAULT '正常' COMMENT '读者状态',
     password_hash VARCHAR(255) NULL COMMENT '读者密码哈希值',

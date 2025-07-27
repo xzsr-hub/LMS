@@ -253,7 +253,7 @@ def update_book_status(book_number: str, status: str):
 def add_reader(library_card_no: str, name: str, gender: str = '男', 
                birth_date: str = None, id_card: str = None, title: str = None,
                max_borrow_count: int = None, department: str = None,
-               address: str = None, phone: str = None, password: Optional[str] = None):
+               address: str = None, phone: str = None, email: str = None, password: Optional[str] = None):
     """
     添加新读者 (通常由管理员操作)。
     如果提供了 password，则会为读者设置密码。
@@ -281,11 +281,11 @@ def add_reader(library_card_no: str, name: str, gender: str = '男',
                 cur.execute("""
                     INSERT INTO readers 
                     (library_card_no, name, gender, birth_date, id_card, title,
-                     max_borrow_count, current_borrow_count, department, address, phone, 
+                     max_borrow_count, current_borrow_count, department, address, phone, email,
                      password_hash, status, registration_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, '正常', CURDATE())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, '正常', CURDATE())
                 """, (library_card_no, name, gender, birth_date, id_card, title,
-                      max_borrow_count, department, address, phone, password_hash_val))
+                      max_borrow_count, department, address, phone, email, password_hash_val))
                 conn.commit()
                 return True, f"读者 '{name}' ({library_card_no}) 添加成功！"
             except Exception as e:
@@ -752,4 +752,158 @@ def get_book_borrowing_history(book_number: str):
                 WHERE b.book_number = %s
                 ORDER BY b.borrow_date DESC
             """, (book_number,))
+            return cur.fetchall()
+
+def get_reader_statistics_summary():
+    """获取读者统计摘要"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # 总读者数
+            cur.execute("SELECT COUNT(*) as total_readers FROM readers WHERE status = '正常'")
+            total_readers = cur.fetchone()['total_readers']
+            
+            # 学生读者数
+            cur.execute("SELECT COUNT(*) as student_readers FROM readers WHERE status = '正常' AND title LIKE '%学生%'")
+            student_readers = cur.fetchone()['student_readers']
+            
+            # 教师读者数
+            cur.execute("SELECT COUNT(*) as teacher_readers FROM readers WHERE status = '正常' AND (title LIKE '%教师%' OR title LIKE '%老师%' OR title LIKE '%讲师%' OR title LIKE '%教授%')")
+            teacher_readers = cur.fetchone()['teacher_readers']
+            
+            # 活跃读者（当前有借阅的读者）
+            cur.execute("""
+                SELECT COUNT(DISTINCT library_card_no) as active_readers 
+                FROM borrowings 
+                WHERE return_date IS NULL
+            """)
+            active_readers = cur.fetchone()['active_readers']
+            
+            # 本月新增读者
+            cur.execute("""
+                SELECT COUNT(*) as new_this_month 
+                FROM readers 
+                WHERE YEAR(registration_date) = YEAR(CURDATE()) 
+                AND MONTH(registration_date) = MONTH(CURDATE())
+            """)
+            new_this_month = cur.fetchone()['new_this_month']
+            
+            return {
+                'total_readers': total_readers,
+                'student_readers': student_readers,
+                'teacher_readers': teacher_readers,
+                'active_readers': active_readers,
+                'new_this_month': new_this_month
+            }
+
+def delete_reader_by_card_no(library_card_no: str) -> tuple[bool, str]:
+    """删除读者（根据借书证号）"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                # 检查读者是否存在
+                cur.execute("SELECT name FROM readers WHERE library_card_no = %s", (library_card_no,))
+                reader = cur.fetchone()
+                if not reader:
+                    return False, "读者不存在。"
+                
+                # 检查是否有未归还的书籍
+                cur.execute("""
+                    SELECT COUNT(*) as unreturned_count 
+                    FROM borrowings 
+                    WHERE library_card_no = %s AND return_date IS NULL
+                """, (library_card_no,))
+                unreturned = cur.fetchone()['unreturned_count']
+                
+                if unreturned > 0:
+                    return False, f"读者 '{reader['name']}' 还有 {unreturned} 本图书未归还，无法删除。"
+                
+                # 删除读者
+                cur.execute("DELETE FROM readers WHERE library_card_no = %s", (library_card_no,))
+                conn.commit()
+                return True, f"读者 '{reader['name']}' ({library_card_no}) 已成功删除。"
+                
+            except Exception as e:
+                conn.rollback()
+                return False, f"删除读者失败：{str(e)}"
+
+def get_available_copies(isbn: str):
+    """获取指定ISBN的所有可用副本"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT b.book_number, b.isbn, bc.title, b.is_available, b.status, b.created_at
+                FROM books b
+                JOIN book_categories bc ON b.isbn = bc.isbn
+                WHERE b.isbn = %s AND b.is_available = '可借' AND b.status = '正常'
+                ORDER BY b.created_at
+            """, (isbn,))
+            return cur.fetchall()
+
+def get_book_copies(isbn: str):
+    """获取指定ISBN的所有副本（包括不可借的）"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT b.book_number, b.isbn, bc.title, b.is_available, b.status, b.created_at
+                FROM books b
+                JOIN book_categories bc ON b.isbn = bc.isbn
+                WHERE b.isbn = %s
+                ORDER BY b.created_at
+            """, (isbn,))
+            return cur.fetchall()
+
+def get_total_active_borrowings_count() -> int:
+    """获取当前活跃借阅总数"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as active_count
+                FROM borrowings
+                WHERE return_date IS NULL
+            """)
+            result = cur.fetchone()
+            return result['active_count'] if result else 0
+
+def get_total_overdue_count() -> int:
+    """获取当前逾期图书总数"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) as overdue_count
+                FROM borrowings
+                WHERE return_date IS NULL AND due_date < CURDATE()
+            """)
+            result = cur.fetchone()
+            return result['overdue_count'] if result else 0
+
+def get_all_borrowing_history():
+    """获取所有借阅历史记录（管理员用）"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    b.borrowing_id,
+                    b.library_card_no,
+                    r.name AS reader_name,
+                    b.book_number,
+                    bc.title AS book_title,
+                    bc.author,
+                    b.borrow_date,
+                    b.due_date,
+                    b.return_date,
+                    b.fine_amount,
+                    CASE
+                        WHEN b.return_date IS NULL AND b.due_date < CURDATE() THEN '逾期未还'
+                        WHEN b.return_date IS NULL THEN '借阅中'
+                        WHEN b.return_date > b.due_date THEN '已还(逾期)'
+                        ELSE '已还'
+                    END AS status
+                FROM borrowings b
+                JOIN readers r ON b.library_card_no = r.library_card_no
+                JOIN books bk ON b.book_number = bk.book_number
+                JOIN book_categories bc ON bk.isbn = bc.isbn
+                ORDER BY b.borrow_date DESC
+                LIMIT 1000
+            """)
+            return cur.fetchall()
             return cur.fetchall() 
