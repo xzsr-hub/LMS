@@ -302,24 +302,6 @@ def search_readers(card_no: str = None, name: str = None, department: str = None
         with conn.cursor() as cur:
             cur.callproc('GetReaderInfo', (card_no, name, department))
             results = cur.fetchall()
-            
-            # 转换英文字段为中文显示
-            for reader in results:
-                # 假设数据库中存储的是 '男' 或 '女'
-                # if reader['gender'] == 'male':
-                #     reader['gender'] = '男'
-                # elif reader['gender'] == 'female':
-                #     reader['gender'] = '女'
-                    
-                # 假设数据库中存储的是 '正常', '冻结', '注销'
-                # if reader['status'] == 'active':
-                #     reader['status'] = '正常'
-                # elif reader['status'] == 'frozen':
-                #     reader['status'] = '冻结'
-                # elif reader['status'] == 'cancelled':
-                #     reader['status'] = '注销'
-                pass # 添加 pass 语句以解决 IndentationError
-            
             return results
 
 def update_reader_info(library_card_no: str, **kwargs):
@@ -752,4 +734,169 @@ def get_book_borrowing_history(book_number: str):
                 WHERE b.book_number = %s
                 ORDER BY b.borrow_date DESC
             """, (book_number,))
-            return cur.fetchall() 
+            return cur.fetchall()
+
+# ====================== 图书副本管理 ======================
+
+def get_available_copies(isbn: str):
+    """获取指定ISBN的可用图书副本"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT b.book_number, b.isbn, bc.title, bc.author, b.is_available, b.status, b.created_at
+                FROM books b
+                JOIN book_categories bc ON b.isbn = bc.isbn
+                WHERE b.isbn = %s AND b.is_available = '可借' AND b.status = '正常'
+                ORDER BY b.book_number
+            """, (isbn,))
+            return cur.fetchall()
+
+def get_book_copies(isbn: str):
+    """获取指定ISBN的所有图书副本信息"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT b.book_number, b.isbn, bc.title, bc.author, b.is_available, b.status, b.created_at
+                FROM books b
+                JOIN book_categories bc ON b.isbn = bc.isbn
+                WHERE b.isbn = %s
+                ORDER BY b.book_number
+            """, (isbn,))
+            return cur.fetchall()
+
+# ====================== 读者管理扩展 ======================
+
+def delete_reader_by_card_no(library_card_no: str) -> tuple[bool, str]:
+    """根据借书证号删除读者"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # 首先检查读者是否存在
+            cur.execute("SELECT name, current_borrow_count FROM readers WHERE library_card_no = %s", (library_card_no,))
+            reader = cur.fetchone()
+            
+            if not reader:
+                return False, "读者不存在。"
+            
+            # 检查是否有未归还的图书
+            if reader['current_borrow_count'] > 0:
+                return False, f"读者 '{reader['name']}' 还有未归还的图书，无法删除。"
+            
+            try:
+                # 删除读者记录（借阅历史会保留，因为外键约束可能是级联或者受保护的）
+                cur.execute("DELETE FROM readers WHERE library_card_no = %s", (library_card_no,))
+                
+                if cur.rowcount == 0:
+                    return False, "删除失败，读者不存在。"
+                
+                conn.commit()
+                return True, f"读者 '{reader['name']}' (证号: {library_card_no}) 已成功删除。"
+                
+            except Exception as e:
+                conn.rollback()
+                return False, f"删除读者失败: {e}"
+
+# ====================== 统计功能扩展 ======================
+
+def get_total_active_borrowings_count() -> int:
+    """获取当前活跃借阅总数统计"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) AS total_count
+                FROM borrowings
+                WHERE status = '借阅中'
+            """)
+            result = cur.fetchone()
+            return result['total_count'] if result else 0
+
+def get_total_overdue_count() -> int:
+    """获取当前逾期图书总数统计"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) AS overdue_count
+                FROM borrowings
+                WHERE status = '借阅中' AND due_date < CURDATE()
+            """)
+            result = cur.fetchone()
+            return result['overdue_count'] if result else 0
+
+def get_system_statistics() -> Dict[str, Any]:
+    """获取系统整体统计信息"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            stats = {}
+            
+            # 图书统计
+            cur.execute("SELECT COUNT(*) AS total_books FROM book_categories")
+            stats['total_book_categories'] = cur.fetchone()['total_books']
+            
+            cur.execute("SELECT COUNT(*) AS total_copies FROM books")
+            stats['total_book_copies'] = cur.fetchone()['total_copies']
+            
+            cur.execute("SELECT COUNT(*) AS available_copies FROM books WHERE is_available = '可借' AND status = '正常'")
+            stats['available_copies'] = cur.fetchone()['available_copies']
+            
+            # 读者统计
+            cur.execute("SELECT COUNT(*) AS total_readers FROM readers WHERE status = '正常'")
+            stats['total_active_readers'] = cur.fetchone()['total_readers']
+            
+            # 借阅统计
+            stats['total_active_borrowings'] = get_total_active_borrowings_count()
+            stats['total_overdue_books'] = get_total_overdue_count()
+            
+            # 今日借阅统计
+            cur.execute("""
+                SELECT COUNT(*) AS today_borrowings
+                FROM borrowings
+                WHERE DATE(borrow_date) = CURDATE()
+            """)
+            stats['today_borrowings'] = cur.fetchone()['today_borrowings']
+            
+            # 今日归还统计
+            cur.execute("""
+                SELECT COUNT(*) AS today_returns
+                FROM borrowings
+                WHERE DATE(return_date) = CURDATE()
+            """)
+            stats['today_returns'] = cur.fetchone()['today_returns']
+            
+            return stats
+
+def return_book_by_number_or_id(book_number_or_borrowing_id: str) -> tuple[bool, str]:
+    """支持通过图书书号或借阅ID进行还书"""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            borrowing_id = None
+            
+            # 首先尝试解析为数字（借阅ID）
+            try:
+                borrowing_id = int(book_number_or_borrowing_id)
+                # 验证这个借阅ID是否存在且未归还
+                cur.execute("""
+                    SELECT borrowing_id FROM borrowings 
+                    WHERE borrowing_id = %s AND status = '借阅中'
+                """, (borrowing_id,))
+                if cur.fetchone():
+                    return return_book(borrowing_id)
+                else:
+                    return False, f"借阅ID {borrowing_id} 不存在或该图书已归还。"
+            except ValueError:
+                # 不是数字，当作图书书号处理
+                book_number = book_number_or_borrowing_id
+                
+                # 查找该图书的活跃借阅记录
+                cur.execute("""
+                    SELECT borrowing_id, library_card_no, borrow_date 
+                    FROM borrowings 
+                    WHERE book_number = %s AND status = '借阅中'
+                    ORDER BY borrow_date DESC
+                    LIMIT 1
+                """, (book_number,))
+                
+                borrowing_record = cur.fetchone()
+                if not borrowing_record:
+                    return False, f"图书 {book_number} 当前没有借出或已归还。"
+                
+                # 使用找到的借阅ID进行还书
+                return return_book(borrowing_record['borrowing_id'])
