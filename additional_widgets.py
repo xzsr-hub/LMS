@@ -1075,37 +1075,16 @@ class BorrowManagementWidget(QWidget):
         book_id_or_borrowing_id = self.return_book_id_input.text().strip() # This could be book_number or borrowing_id
         if not book_id_or_borrowing_id: QMessageBox.warning(self, "输入不完整", "请输入要归还的图书书号或借阅ID。"); return
         
-        # Attempt to get borrowing_id if book_number is given and it's unique for current borrowings
-        # This logic might be complex here; lib.return_book needs to be robust.
-        # Let's assume lib.return_book can handle book_number or borrowing_id
-        
-        # Simplification: assume return_book takes book_number and finds the active borrowing.
-        # Or, it could take borrowing_id if available. For now, stick to current enhanced_library
-        # which likely expects a borrowing_id. Or we need a new lib function.
-        # The original CLI app.py used `lib.return_book(borrowing_id)`.
-        # The GUI currently has a text input for book_id.
-        # This needs to be reconciled. For now, we pass what's in the input.
-        # It might be better to find borrowing_id from book_id for the current user if reader,
-        # or from a list if admin.
-        
-        # Assuming the input is borrowing_id for now, as that's what lib.return_book took in some versions.
-        # If it's book_number, the lib function needs adjustment or a new one.
-        # Let's assume the user inputs borrowing_id for now.
-        try:
-            borrow_id_to_return = int(book_id_or_borrowing_id)
-        except ValueError:
-             # If not an int, it might be a book_number. The library function needs to handle this.
-             # For now, let's try to find an active borrowing for this book_number
-             # This is a placeholder for more robust logic or a library change.
-            QMessageBox.warning(self, "输入错误", "请输入有效的借阅ID (数字) 或图书书号。还书逻辑待完善。")
-            return
-
-        success, message = lib.return_book(borrow_id_to_return) # Assumes borrowing_id
+        # 使用改进的还书函数，支持图书书号或借阅ID
+        success, message = lib.return_book_by_number_or_id(book_id_or_borrowing_id)
         if success:
             QMessageBox.information(self, "还书成功", message)
-            self.return_book_id_input.clear(); self.refresh_data()
-            if self.parent_window: self.parent_window.show_status_message(message, 3000, "success")
-        else: QMessageBox.warning(self, "还书失败", message)
+            self.return_book_id_input.clear()
+            self.refresh_data()
+            if self.parent_window: 
+                self.parent_window.show_status_message(message, 3000, "success")
+        else: 
+            QMessageBox.warning(self, "还书失败", message)
 
     def search_borrow_history(self):
         card_no_filter_text = self.history_card_no_filter.text().strip()
@@ -1206,11 +1185,9 @@ class BorrowManagementWidget(QWidget):
         """更新模块顶部的统计标签，如总借阅和逾期数"""
         if hasattr(self, 'stats_label') and (self.user_info and self.user_info.get('role') == 'admin'):
             try:
-                # These need to be implemented in enhanced_library.py
-                # total_borrowings = lib.get_total_active_borrowings_count()
-                # overdue_count = lib.get_total_overdue_count()
-                # self.stats_label.setText(f"当前借出: {total_borrowings} | 当前逾期: {overdue_count}")
-                pass # Placeholder for now
+                total_borrowings = lib.get_total_active_borrowings_count()
+                overdue_count = lib.get_total_overdue_count()
+                self.stats_label.setText(f"当前借出: {total_borrowings} | 当前逾期: {overdue_count}")
             except AttributeError:
                  self.stats_label.setText("当前借出: N/A | 当前逾期: N/A (库函数缺失)")
             except Exception:
