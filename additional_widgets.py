@@ -117,6 +117,7 @@ class ReaderManagementWidget(QWidget):
 
     def adjust_ui_for_role(self):
         is_admin = self.user_info and self.user_info.get('role') == 'admin'
+        is_reader = self.user_info and self.user_info.get('role') == 'reader'
 
         # Remove all widgets from layout first to handle reconstruction cleanly
         while self.layout.count():
@@ -125,12 +126,18 @@ class ReaderManagementWidget(QWidget):
             elif item.layout(): pass # Sub-layouts handled by parent hide
         
         if is_admin:
+            # Show full interface for admin
             if self._access_denied_label_ref: self._access_denied_label_ref.hide()
             self.layout.addWidget(self._original_widgets['title_frame'])
             self._original_widgets['title_frame'].show()
             self.layout.addWidget(self._original_widgets['tabs'])
             self._original_widgets['tabs'].show()
-        else:
+            
+            # Enable all admin functions
+            self._set_admin_buttons_visible(True)
+            
+        elif is_reader:
+            # Limited interface for readers (they can't manage other readers)
             if self._original_widgets.get('title_frame'): self._original_widgets['title_frame'].hide()
             if self._original_widgets.get('tabs'): self._original_widgets['tabs'].hide()
             if not self._access_denied_label_ref:
@@ -139,11 +146,40 @@ class ReaderManagementWidget(QWidget):
                 self._access_denied_label_ref.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
                 self._access_denied_label_ref.setStyleSheet("color: #dc3545; margin-top: 20px;")
                 self.layout.addWidget(self._access_denied_label_ref)
-                self.layout.addStretch() # Add stretcher after deny label
+                self.layout.addStretch()
             
-            role_text = "您没有权限访问此模块。" if (self.user_info and self.user_info.get('role') == 'reader') else "角色未知，无法访问此模块。"
+            role_text = "读者用户无权限管理其他读者信息。\n如需修改个人信息，请联系管理员。"
             self._access_denied_label_ref.setText(role_text)
             self._access_denied_label_ref.show()
+        else:
+            # Unknown role
+            if self._original_widgets.get('title_frame'): self._original_widgets['title_frame'].hide()
+            if self._original_widgets.get('tabs'): self._original_widgets['tabs'].hide()
+            if not self._access_denied_label_ref:
+                self._access_denied_label_ref = QLabel()
+                self._access_denied_label_ref.setAlignment(Qt.AlignCenter)
+                self._access_denied_label_ref.setFont(QFont("Microsoft YaHei UI", 16, QFont.Bold))
+                self._access_denied_label_ref.setStyleSheet("color: #dc3545; margin-top: 20px;")
+                self.layout.addWidget(self._access_denied_label_ref)
+                self.layout.addStretch()
+            
+            role_text = "角色未知，无法访问此模块。\n请联系系统管理员。"
+            self._access_denied_label_ref.setText(role_text)
+            self._access_denied_label_ref.show()
+
+    def _set_admin_buttons_visible(self, visible: bool):
+        """设置管理员专用按钮的可见性"""
+        admin_buttons = [
+            'btn_add_reader', 'btn_update_reader', 'btn_delete_reader',
+            'btn_clear_reader_form', 'btn_load_reader_to_form',
+            'btn_batch_import', 'btn_batch_export', 'btn_data_cleanup'
+        ]
+        
+        for button_name in admin_buttons:
+            if hasattr(self, button_name):
+                button = getattr(self, button_name)
+                button.setVisible(visible)
+                button.setEnabled(visible)
 
     def init_reader_info_tab(self):
         main_layout = QVBoxLayout(self.tab_reader_info)
@@ -181,12 +217,13 @@ class ReaderManagementWidget(QWidget):
         reader_group_layout.addWidget(QLabel("联系地址:"), 4, 0); self.reader_address = QTextEdit(); self.reader_address.setFixedHeight(80); self.reader_address.setPlaceholderText("详细联系地址..."); reader_group_layout.addWidget(self.reader_address, 4, 1, 1, 3)
         form_layout.addWidget(reader_group)
 
-        # Buttons for Category Tab
-        cat_button_layout = QHBoxLayout()
+        # Buttons for Reader Tab
+        reader_button_layout = QHBoxLayout()
         self.btn_add_reader = QPushButton("➕ 添加读者"); self.btn_search_reader = QPushButton("🔍 搜索读者")
-        self.btn_clear_reader_form = QPushButton("🗑️ 清空表单"); self.btn_load_cat_to_form = QPushButton("📝 编辑选中")
-        cat_button_layout.addWidget(self.btn_add_reader); cat_button_layout.addWidget(self.btn_search_reader); cat_button_layout.addWidget(self.btn_clear_reader_form); cat_button_layout.addWidget(self.btn_load_cat_to_form); cat_button_layout.addStretch()
-        form_layout.addLayout(cat_button_layout)
+        self.btn_clear_reader_form = QPushButton("🗑️ 清空表单"); self.btn_load_reader_to_form = QPushButton("📝 编辑选中")
+        self.btn_update_reader = QPushButton("💾 更新读者"); self.btn_delete_reader = QPushButton("🗑️ 删除读者")
+        reader_button_layout.addWidget(self.btn_add_reader); reader_button_layout.addWidget(self.btn_search_reader); reader_button_layout.addWidget(self.btn_clear_reader_form); reader_button_layout.addWidget(self.btn_load_reader_to_form); reader_button_layout.addWidget(self.btn_update_reader); reader_button_layout.addWidget(self.btn_delete_reader); reader_button_layout.addStretch()
+        form_layout.addLayout(reader_button_layout)
         splitter.addWidget(form_frame)
 
         # Table Frame for Categories
@@ -199,10 +236,12 @@ class ReaderManagementWidget(QWidget):
         splitter.setSizes([300, 450])
         main_layout.addWidget(splitter)
 
-        # Connections for Category Tab
+        # Connections for Reader Tab
         self.btn_add_reader.clicked.connect(self.add_reader); self.btn_search_reader.clicked.connect(self.search_readers)
         self.btn_clear_reader_form.clicked.connect(self.clear_reader_form)
-        self.btn_load_cat_to_form.clicked.connect(self.load_reader_to_form)
+        self.btn_load_reader_to_form.clicked.connect(self.load_reader_to_form)
+        self.btn_update_reader.clicked.connect(self.update_reader)
+        self.btn_delete_reader.clicked.connect(self.delete_reader)
         self.reader_table.itemDoubleClicked.connect(self.load_reader_to_form) # For admin to edit
 
     def init_reader_stats_tab(self):
@@ -233,6 +272,11 @@ class ReaderManagementWidget(QWidget):
         value_label = QLabel(value); value_label.setStyleSheet("color:white; font-weight:bold; font-size:24px;"); value_label.setAlignment(Qt.AlignCenter); value_label.setObjectName(f"stat_value_{row}_{col}")
         card_layout.addWidget(title_label); card_layout.addWidget(value_label)
         layout.addWidget(card, row, col)
+        
+        # Store reference to value label for updating
+        if not hasattr(self, 'stat_labels'):
+            self.stat_labels = {}
+        self.stat_labels[f'{row}_{col}'] = value_label
 
     def darken_color(self, color_hex):
         try:
@@ -255,15 +299,36 @@ class ReaderManagementWidget(QWidget):
 
     def validate_reader_input(self):
         errors = []
-        if not self.reader_card_number.text().strip(): errors.append("借书证号不能为空")
-        elif not re.match(r"R\d{7}", self.reader_card_number.text().strip()): errors.append("借书证号格式不正确（应为R+7位数字）")
-        if not self.reader_name.text().strip(): errors.append("读者姓名不能为空")
-        if not self.reader_id_number.text().strip(): errors.append("身份证号不能为空")
-        elif not re.match(r"\d{17}[\dxX]", self.reader_id_number.text().strip()): errors.append("身份证号格式不正确")
-        if not self.reader_phone.text().strip(): errors.append("联系电话不能为空")
-        elif not re.match(r"1[3-9]\d{9}", self.reader_phone.text().strip()): errors.append("手机号格式不正确")
+        
+        # 借书证号验证 - 允许更灵活的格式
+        card_no = self.reader_card_number.text().strip()
+        if not card_no: 
+            errors.append("借书证号不能为空")
+        elif len(card_no) < 3:
+            errors.append("借书证号长度不能少于3位")
+        
+        # 姓名验证
+        name = self.reader_name.text().strip()
+        if not name: 
+            errors.append("读者姓名不能为空")
+        elif len(name) < 2:
+            errors.append("姓名长度不能少于2个字符")
+        
+        # 身份证号验证 - 可选字段，但如果填写必须正确
+        id_number = self.reader_id_number.text().strip()
+        if id_number and not re.match(r"^\d{17}[\dxX]$|^\d{15}$", id_number):
+            errors.append("身份证号格式不正确（应为15位或18位数字，最后一位可为X）")
+        
+        # 手机号验证 - 可选字段，但如果填写必须正确
+        phone = self.reader_phone.text().strip()
+        if phone and not re.match(r"^1[3-9]\d{9}$", phone):
+            errors.append("手机号格式不正确（应为11位，以1开头）")
+        
+        # 邮箱验证 - 可选字段，但如果填写必须正确
         email = self.reader_email.text().strip()
-        if email and not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", email): errors.append("邮箱格式不正确")
+        if email and not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", email):
+            errors.append("邮箱格式不正确")
+            
         return errors
 
     def add_reader(self):
@@ -272,7 +337,14 @@ class ReaderManagementWidget(QWidget):
         
         library_card_no = self.reader_card_number.text().strip()
         name = self.reader_name.text().strip()
-        gender = "男" if self.reader_gender.currentIndex() == 0 else "女"
+        # 改进性别处理
+        gender_text = self.reader_gender.currentText()
+        if "男" in gender_text:
+            gender = "男"
+        elif "女" in gender_text:
+            gender = "女"
+        else:
+            gender = "男"  # 默认值
         id_number = self.reader_id_number.text().strip() or None
         phone = self.reader_phone.text().strip() or None
         email = self.reader_email.text().strip() or None
@@ -288,26 +360,56 @@ class ReaderManagementWidget(QWidget):
         try:
             success, message = lib.add_reader(
                 library_card_no=library_card_no, name=name, gender=gender,
-                id_card=id_number, phone=phone, title=title,
+                id_card=id_number, phone=phone, email=email, title=title,
                 max_borrow_count=max_borrow, address=address
             )
             if success:
                 QMessageBox.information(self, "添加成功", message)
                 self.clear_reader_form()
                 self.load_all_readers()
+                self.load_reader_statistics()  # Also update statistics
                 if self.parent_window: self.parent_window.show_status_message(f"✓ 读者 '{name}' 已添加", 3000, "success")
             else: QMessageBox.warning(self, "添加失败", message)
         except Exception as e: QMessageBox.critical(self, "操作失败", f"添加读者失败：\n{e}")
 
     def search_readers(self):
+        # 收集搜索条件
         name = self.reader_name.text().strip() or None
         card_no = self.reader_card_number.text().strip() or None
+        phone = self.reader_phone.text().strip() or None
+        
+        # 如果没有任何搜索条件，显示所有读者
+        if not any([name, card_no, phone]):
+            self.load_all_readers()
+            if self.parent_window: 
+                self.parent_window.show_status_message("显示所有读者", 2000, "info")
+            return
         
         try:
+            # 执行搜索（这里可能需要扩展search_readers函数来支持更多参数）
             results = lib.search_readers(card_no=card_no, name=name)
+            
+            # 如果提供了电话号码，进一步过滤结果
+            if phone:
+                results = [r for r in results if r.get('phone') and phone in r.get('phone')]
+            
             self.populate_reader_table(results)
-            if self.parent_window: self.parent_window.show_status_message(f"🔍 找到 {len(results)} 位读者", 3000, "success")
-        except Exception as e: QMessageBox.critical(self, "搜索失败", f"搜索读者失败：\n{e}")
+            
+            # 用户反馈
+            search_terms = []
+            if name: search_terms.append(f"姓名: {name}")
+            if card_no: search_terms.append(f"借书证号: {card_no}")
+            if phone: search_terms.append(f"电话: {phone}")
+            search_desc = ", ".join(search_terms)
+            
+            if self.parent_window: 
+                self.parent_window.show_status_message(
+                    f"🔍 搜索 {search_desc}，找到 {len(results)} 位读者", 3000, "success"
+                )
+        except Exception as e: 
+            QMessageBox.critical(self, "搜索失败", f"搜索读者失败：\n{e}")
+            # 搜索失败时显示空结果
+            self.populate_reader_table([])
     
     def update_reader(self):
         selected_rows = self.reader_table.selectionModel().selectedRows()
@@ -323,7 +425,14 @@ class ReaderManagementWidget(QWidget):
         # 获取表单中的数据
         library_card_no = self.reader_card_number.text().strip()
         name = self.reader_name.text().strip()
-        gender = "男" if self.reader_gender.currentIndex() == 0 else "女"
+        # 改进性别处理
+        gender_text = self.reader_gender.currentText()
+        if "男" in gender_text:
+            gender = "男"
+        elif "女" in gender_text:
+            gender = "女"
+        else:
+            gender = "男"  # 默认值
         id_number = self.reader_id_number.text().strip() or None
         phone = self.reader_phone.text().strip() or None
         email = self.reader_email.text().strip() or None
@@ -361,28 +470,55 @@ class ReaderManagementWidget(QWidget):
             QMessageBox.critical(self, "操作失败", f"更新读者信息失败：\\n{e}")
 
     def delete_reader(self):
+        """删除选中的读者，包含安全检查"""
+        # 检查用户权限
+        if not (self.user_info and self.user_info.get('role') == 'admin'):
+            QMessageBox.warning(self, "权限不足", "只有管理员可以删除读者。")
+            return
+            
         selected_rows = self.reader_table.selectionModel().selectedRows()
-        if not selected_rows: QMessageBox.information(self, "提示", "请先选择要删除的读者。"); return
+        if not selected_rows: 
+            QMessageBox.information(self, "提示", "请先选择要删除的读者。")
+            return
+            
         selected_row_index = selected_rows[0].row()
         reader_data = self.reader_table.item(selected_row_index, 0).data(Qt.UserRole)
-        if not reader_data: return
-        library_card_no = reader_data.get('library_card_no'); name = reader_data.get('name')
-        try:
-            conn = db.get_connection(); cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) as count FROM borrowings WHERE library_card_no = %s AND status = 'borrowed'", (library_card_no,))
-            borrowed_count = cur.fetchone()['count']; cur.close(); conn.close()
-            if borrowed_count > 0: QMessageBox.warning(self, "无法删除", f"读者 '{name}' 还有 {borrowed_count} 本图书未归还！"); return
-        except Exception as e: QMessageBox.critical(self, "检查失败", f"检查读者借阅状态失败：\n{e}")
+        if not reader_data: 
+            QMessageBox.warning(self, "错误", "无法获取读者数据。")
+            return
+            
+        library_card_no = reader_data.get('library_card_no')
+        name = reader_data.get('name')
         
-        if QMessageBox.question(self, "确认删除", f"确定要删除读者 '{name}' 吗？此操作不可恢复！", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-            try:
-                success, message = lib.delete_reader_by_card_no(library_card_no)
-                if success:
-                    QMessageBox.information(self, "操作成功", message)
-                    self.clear_reader_form(); self.load_all_readers(); self.update_quick_stats()
-                    if self.parent_window: self.parent_window.show_status_message(f"✓ 读者 '{name}' 已删除", 3000, "success")
-                else: QMessageBox.warning(self, "删除失败", message)
-            except Exception as e: QMessageBox.critical(self, "操作失败", f"删除读者失败：\n{e}")
+        if not library_card_no:
+            QMessageBox.warning(self, "错误", "读者借书证号不能为空。")
+            return
+        
+        # 确认删除对话框
+        reply = QMessageBox.question(
+            self, "确认删除", 
+            f"确定要删除读者 '{name}' (借书证号: {library_card_no}) 吗？\n\n"
+            f"注意：此操作不可恢复！系统会自动检查该读者是否有未归还图书。", 
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        try:
+            success, message = lib.delete_reader_by_card_no(library_card_no)
+            if success:
+                QMessageBox.information(self, "删除成功", message)
+                self.clear_reader_form()
+                self.load_all_readers()
+                self.load_reader_statistics()  # 更新统计信息
+                if self.parent_window: 
+                    self.parent_window.show_status_message(f"✓ 读者 '{name}' 已删除", 3000, "success")
+            else: 
+                QMessageBox.warning(self, "删除失败", message)
+        except Exception as e: 
+            QMessageBox.critical(self, "操作失败", f"删除读者失败：\n{e}")
 
     def clear_reader_form(self):
         self.reader_card_number.clear(); self.reader_name.clear(); self.reader_gender.setCurrentIndex(0)
@@ -391,34 +527,59 @@ class ReaderManagementWidget(QWidget):
         self.reader_card_number.setFocus()
 
     def load_all_readers(self):
-        try: self.populate_reader_table(lib.search_readers())
-        except Exception as e: QMessageBox.critical(self, "加载失败", f"加载读者信息失败：\n{e}")
+        try: 
+            readers = lib.search_readers()
+            self.populate_reader_table(readers)
+        except Exception as e: 
+            QMessageBox.critical(self, "加载失败", f"加载读者信息失败：\n{e}")
+            # If loading fails, show empty table instead of crashing
+            self.populate_reader_table([])
 
     def populate_reader_table(self, readers):
-        self.reader_table.setRowCount(0)
-        for row_num, reader_data in enumerate(readers):
-            self.reader_table.insertRow(row_num)
-            current_borrow = reader_data.get('current_borrow_count', 0)
-            # 修改性别映射，支持中文性别值和英文性别值
-            gender_display_map = {
-                "male": "👨 男", "female": "👩 女", "other": "🧑 其他",
-                "男": "👨 男", "女": "👩 女"  # 添加中文性别映射
-            }
-            # 使用title字段而不是reader_type字段
-            title_display = reader_data.get('title', '')
-            if title_display:
-                title_display = f"🎓 {title_display}"  # 添加图标
-            items = [
-                reader_data.get('library_card_no', ''), reader_data.get('name', ''),
-                gender_display_map.get(reader_data.get('gender', ''), ''), reader_data.get('id_number', ''),
-                reader_data.get('phone', ''), reader_data.get('email', ''),
-                title_display,  # 使用title字段
-                str(reader_data.get('max_borrow_count', '')), str(current_borrow),
-                str(reader_data.get('registration_date', ''))
-            ]
-            for col, text in enumerate(items): self.reader_table.setItem(row_num, col, QTableWidgetItem(text))
-            self.reader_table.item(row_num, 0).setData(Qt.UserRole, reader_data)
-        self.update_quick_stats()
+        """填充读者表格数据，包含错误处理"""
+        try:
+            self.reader_table.setRowCount(0)
+            if not readers:
+                self.update_quick_stats()
+                return
+                
+            for row_num, reader_data in enumerate(readers):
+                self.reader_table.insertRow(row_num)
+                current_borrow = reader_data.get('current_borrow_count', 0)
+                
+                # 修改性别映射，支持中文性别值和英文性别值
+                gender_display_map = {
+                    "male": "👨 男", "female": "👩 女", "other": "🧑 其他",
+                    "男": "👨 男", "女": "👩 女"  # 添加中文性别映射
+                }
+                gender_display = gender_display_map.get(reader_data.get('gender', ''), '👨 男')
+                
+                # 使用title字段而不是reader_type字段
+                title_display = reader_data.get('title', '')
+                if title_display:
+                    title_display = f"🎓 {title_display}"  # 添加图标
+                
+                items = [
+                    reader_data.get('library_card_no', ''), 
+                    reader_data.get('name', ''),
+                    gender_display, 
+                    reader_data.get('id_number', '') or reader_data.get('id_card', ''),
+                    reader_data.get('phone', ''), 
+                    reader_data.get('email', ''),
+                    title_display,  # 使用title字段
+                    str(reader_data.get('max_borrow_count', '')), 
+                    str(current_borrow),
+                    str(reader_data.get('registration_date', ''))
+                ]
+                
+                for col, text in enumerate(items): 
+                    self.reader_table.setItem(row_num, col, QTableWidgetItem(str(text)))
+                self.reader_table.item(row_num, 0).setData(Qt.UserRole, reader_data)
+                
+        except Exception as e:
+            QMessageBox.warning(self, "数据显示错误", f"显示读者数据时发生错误：\n{e}")
+        finally:
+            self.update_quick_stats()
 
     def load_reader_to_form(self):
         selected_rows = self.reader_table.selectionModel().selectedRows()
@@ -447,19 +608,38 @@ class ReaderManagementWidget(QWidget):
         self.reader_address.setPlainText(reader_data.get('address', ''))
 
     def load_reader_statistics(self):
+        """加载读者统计信息，包含错误处理"""
         try:
             stats = lib.get_reader_statistics_summary()
-            if hasattr(self, 'stat_labels'):
+            
+            # 确保统计标签已初始化
+            if hasattr(self, 'stat_labels') and self.stat_labels:
                 self.stat_labels.get('0_0', QLabel()).setText(str(stats.get('total_readers', 0)))
                 self.stat_labels.get('0_1', QLabel()).setText(str(stats.get('student_readers', 0)))
                 self.stat_labels.get('0_2', QLabel()).setText(str(stats.get('teacher_readers', 0)))
                 self.stat_labels.get('1_0', QLabel()).setText(str(stats.get('active_readers', 0)))
                 self.stat_labels.get('1_1', QLabel()).setText(str(stats.get('new_this_month', 0)))
-                borrow_rate = (stats.get('active_readers',0) / stats.get('total_readers',1) * 100) if stats.get('total_readers',0) > 0 else 0
+                
+                # 计算借阅率
+                total_readers = stats.get('total_readers', 0)
+                active_readers = stats.get('active_readers', 0)
+                borrow_rate = (active_readers / total_readers * 100) if total_readers > 0 else 0
                 self.stat_labels.get('1_2', QLabel()).setText(f"{borrow_rate:.1f}%")
+            
+            # 更新顶部统计标签
             if hasattr(self, 'stats_label'):
-                self.stats_label.setText(f"总读者: {stats.get('total_readers', 0)} | 活跃读者: {stats.get('active_readers', 0)}")
-        except Exception as e: print(f"加载读者统计失败: {e}")
+                total = stats.get('total_readers', 0)
+                active = stats.get('active_readers', 0)
+                self.stats_label.setText(f"总读者: {total} | 活跃读者: {active}")
+                
+        except Exception as e: 
+            print(f"加载读者统计失败: {e}")
+            # 设置默认值
+            if hasattr(self, 'stats_label'):
+                self.stats_label.setText("总读者: N/A | 活跃读者: N/A")
+            if hasattr(self, 'stat_labels') and self.stat_labels:
+                for key in self.stat_labels:
+                    self.stat_labels[key].setText("N/A")
 
     def update_quick_stats(self): self.load_reader_statistics()
     def batch_import_readers(self): QMessageBox.information(self, "功能提示", "批量导入功能待实现。")
